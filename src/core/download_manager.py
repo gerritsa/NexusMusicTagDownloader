@@ -8,11 +8,12 @@ class DownloadWorker(QThread):
     error = Signal(str)
     log = Signal(str)
 
-    def __init__(self, url: str, output_dir: str, format_key: str = 'mp3'):
+    def __init__(self, url: str, output_dir: str, format_key: str = 'mp3', bitrate: str = '320'):
         super().__init__()
         self.url = url
         self.output_dir = output_dir
         self.format_key = format_key
+        self.bitrate = bitrate
 
     def run(self):
         # Hooks for yt-dlp
@@ -47,7 +48,7 @@ class DownloadWorker(QThread):
                 {
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': self.format_key,
-                    'preferredquality': '192',
+                    'preferredquality': self.bitrate,
                 },
                 {'key': 'EmbedThumbnail'},
                 # {'key': 'FFmpegMetadata'}, # Disabled to prevent unwanted tags
@@ -58,10 +59,16 @@ class DownloadWorker(QThread):
             'no_warnings': True,
             'user_agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
             # Network stability fixes
+            # Network stability & Speed fixes
             'force_ipv4': True,
             'retries': 10,
-            'socket_timeout': 30,
-            'continuedl': False, # Disable resume to prevent 416 errors
+            'fragment_retries': 15,
+            'socket_timeout': 60,
+            'continuedl': True,
+            'concurrent_fragment_downloads': 5,
+            'buffersize': 1024*1024, # 1MB buffer
+            'nopostoverwrites': False,
+            'keepvideo': False,
         }
 
         try:
@@ -188,9 +195,13 @@ class DownloadManager(QObject):
     """
     download_added = Signal(DownloadWorker)
 
-    def __init__(self, output_dir: str = None):
+    def __init__(self, settings=None):
         super().__init__()
-        self.output_dir = output_dir or os.path.expanduser("~/Downloads")
+        self.settings = settings
+        # Fallback if no settings passed, though MainWindow should pass it
+        self.output_dir = os.path.expanduser("~/Downloads")
+        if self.settings and hasattr(self.settings, 'save_path'):
+            self.output_dir = self.settings.save_path
         self.workers = []
 
     def fetch_info(self, url: str):
@@ -211,7 +222,19 @@ class DownloadManager(QObject):
         job_data: {'url', 'title', 'artist', ...}
         """
         url = job_data.get('url')
-        worker = DownloadWorker(url, self.output_dir)
+        
+        # Hardened settings access to prevent AttributeError
+        save_path = os.path.expanduser("~/Downloads")
+        bitrate = "320"
+        
+        if self.settings:
+            try:
+                save_path = self.settings.save_path
+                bitrate = self.settings.bitrate
+            except AttributeError:
+                pass
+                
+        worker = DownloadWorker(url, save_path, bitrate=bitrate)
         self.workers.append(worker)
         
         # We need to pass metadata to apply post-download

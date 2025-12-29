@@ -1,5 +1,5 @@
 import os
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox,
                                  QComboBox, QPushButton, QSpacerItem, QSizePolicy, QFrame, QMessageBox)
 from PySide6.QtCore import Qt, Signal
 
@@ -93,8 +93,12 @@ class ConvertDialog(QDialog):
             fname = os.path.basename(self.track_info.get('filepath', 'Unknown.mp3'))
             extracted = MetadataManager.parse_filename(fmt, fname)
             if extracted:
-                preview_parts = [f"{k}: {v}" for k, v in extracted.items()]
-                self.preview_lbl.setText("Extracted: " + ", ".join(preview_parts))
+                lines = ["Extracted data:"]
+                for k, v in extracted.items():
+                    # Capitalize key for display (e.g. 'artist' -> 'Artist')
+                    display_key = k.capitalize()
+                    lines.append(f"{display_key}: {v}")
+                self.preview_lbl.setText("\n".join(lines))
             else:
                 self.preview_lbl.setText("No match found for this format.")
 
@@ -109,3 +113,133 @@ class ConvertDialog(QDialog):
             "%genre% - Genre"
         )
         QMessageBox.information(self, "Placeholders Help", help_text)
+
+from PySide6.QtWidgets import QGroupBox, QFormLayout, QFileDialog
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from ..core.settings_manager import SettingsManager
+        self.settings = SettingsManager()
+        
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Downloader Group
+        dl_group = QGroupBox("Downloader")
+        dl_layout = QFormLayout(dl_group)
+        
+        self.path_input = QLineEdit(self.settings.save_path)
+        path_btn = QPushButton("Browse...")
+        path_btn.clicked.connect(self._on_browse_path)
+        
+        path_row = QHBoxLayout()
+        path_row.addWidget(self.path_input)
+        path_row.addWidget(path_btn)
+        dl_layout.addRow("Save Location:", path_row)
+        
+        self.bitrate_combo = QComboBox()
+        self.bitrate_combo.addItems(["128", "192", "256", "320"])
+        self.bitrate_combo.setCurrentText(self.settings.bitrate)
+        dl_layout.addRow("Bitrate (kbps):", self.bitrate_combo)
+        
+        layout.addWidget(dl_group)
+        
+        # Discogs Group
+        discogs_group = QGroupBox("Discogs")
+        discogs_layout = QFormLayout(discogs_group)
+        
+        self.discogs_token_input = QLineEdit(self.settings.discogs_token)
+        self.discogs_token_input.setPlaceholderText("Paste your Discogs API token here")
+        self.discogs_token_input.setEchoMode(QLineEdit.Password)
+        
+        token_btn = QPushButton("Get Token")
+        token_btn.clicked.connect(self._on_get_discogs_token)
+        
+        token_row = QHBoxLayout()
+        token_row.addWidget(self.discogs_token_input)
+        token_row.addWidget(token_btn)
+        discogs_layout.addRow("API Token:", token_row)
+        
+        layout.addWidget(discogs_group)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("Save")
+        ok_btn.clicked.connect(self._on_save)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        
+        btns.addStretch()
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        layout.addLayout(btns)
+
+    def _on_browse_path(self):
+        directory = QFileDialog.getExistingDirectory(self, "Select Save Location", self.path_input.text())
+        if directory:
+            self.path_input.setText(directory)
+
+    def _on_save(self):
+        self.settings.save_path = self.path_input.text()
+        self.settings.bitrate = self.bitrate_combo.currentText()
+        self.settings.discogs_token = self.discogs_token_input.text()
+        self.accept()
+    
+    def _on_get_discogs_token(self):
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl("https://www.discogs.com/settings/developers"))
+
+from PySide6.QtWidgets import QListWidget, QListWidgetItem
+
+class ColumnDialog(QDialog):
+    def __init__(self, title, all_columns, visible_columns, parent=None):
+        from PySide6.QtWidgets import QAbstractItemView
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(300)
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Select columns to display:"))
+        
+        self.list_widget = QListWidget()
+        self.list_widget.setDragDropMode(QAbstractItemView.InternalMove)
+        
+        for col in all_columns:
+            item = QListWidgetItem(col)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
+            check_state = Qt.Checked if col in visible_columns else Qt.Unchecked
+            item.setCheckState(check_state)
+            self.list_widget.addItem(item)
+            
+        layout.addWidget(self.list_widget)
+
+        tip = QLabel("<i>Tip: Drag to reorder columns</i>")
+        tip.setAlignment(Qt.AlignCenter)
+        layout.addWidget(tip)
+        
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("Apply")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        layout.addLayout(btns)
+
+    def get_column_state(self):
+        """Returns ordered list of {'name', 'visible'} dicts."""
+        state = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            state.append({
+                'name': item.text(),
+                'visible': item.checkState() == Qt.Checked
+            })
+        return state

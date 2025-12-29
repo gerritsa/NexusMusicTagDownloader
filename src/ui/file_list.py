@@ -9,7 +9,7 @@ class TrackModel(QAbstractTableModel):
     """
     Model for displaying Track objects in a table.
     """
-    COLUMNS = ["Filename", "Title", "Artist", "Album", "Year", "Track", "Genre"]
+    COLUMNS = ["Filename", "Title", "Artist", "Album", "Year", "Track", "Genre", "Album Artist", "Composer", "Disc", "Compilation"]
     
     def __init__(self, tracks: List[Track] = None):
         super().__init__()
@@ -35,7 +35,10 @@ class TrackModel(QAbstractTableModel):
             # Map columns to metadata keys
             key = self._get_key_for_col(col)
             if key:
-                return track.metadata.get(key, "")
+                val = track.metadata.get(key, "")
+                if key == 'compilation':
+                    return "1" if val in [True, 1, "1"] else "0"
+                return str(val)
 
         if role == Qt.TextAlignmentRole:
             return Qt.AlignLeft | Qt.AlignVCenter
@@ -88,14 +91,17 @@ class TrackModel(QAbstractTableModel):
 
     def _get_key_for_col(self, col):
         # Maps column index to internal metadata key
-        # "Filename", "Title", "Artist", "Album", "Year", "Track", "Genre"
         mapping = {
             1: 'title',
             2: 'artist',
             3: 'album',
             4: 'year',
             5: 'track',
-            6: 'genre'
+            6: 'genre',
+            7: 'album_artist',
+            8: 'composer',
+            9: 'disc_number',
+            10: 'compilation'
         }
         return mapping.get(col)
 
@@ -110,7 +116,50 @@ class TrackModel(QAbstractTableModel):
         self.beginInsertRows(QModelIndex(), len(self._tracks), len(self._tracks) + len(tracks) - 1)
         self._tracks.extend(tracks)
         self.endInsertRows()
+
+    def remove_tracks(self, rows: List[int]):
+        """Remove tracks at given row indices."""
+        if not rows:
+            return
         
+        # Sort in reverse to avoid index shifts
+        for row in sorted(rows, reverse=True):
+            self.beginRemoveRows(QModelIndex(), row, row)
+            self._tracks.pop(row)
+            self.endRemoveRows()
+        
+    def sort(self, column, order=Qt.AscendingOrder):
+        """Sort model by a specific column."""
+        self.layoutAboutToBeChanged.emit()
+        
+        reverse = (order == Qt.DescendingOrder)
+        
+        def sort_key(track):
+            if column == 0: # Filename
+                return track.filename.lower()
+            
+            key = self._get_key_for_col(column)
+            val = track.metadata.get(key, "")
+            
+            # Special handling for numerical columns
+            if key == 'track':
+                # Handle "1/10" or "01" or empty
+                try:
+                    s = str(val).split('/')[0]
+                    return int(s) if s else 0
+                except:
+                    return 0
+            if key == 'year':
+                try:
+                    return int(val) if val else 0
+                except:
+                    return 0
+                    
+            return str(val).lower()
+
+        self._tracks.sort(key=sort_key, reverse=reverse)
+        self.layoutChanged.emit()
+
     def get_track(self, index: int) -> Track:
         if 0 <= index < len(self._tracks):
             return self._tracks[index]
@@ -134,11 +183,13 @@ class FileList(QTableView):
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setAlternatingRowColors(True)
         self.setShowGrid(False)
-        self.setSortingEnabled(True) # Logic needed in model for this, skip for now or impl later
+        self.setSortingEnabled(True)
+        self.setFrameShape(QTableView.NoFrame)  # Remove redundant border for cleaner tab integration
         
         # Style
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.horizontalHeader().setSectionsMovable(True)
         self.horizontalHeader().setStyleSheet("QHeaderView::section { font-weight: normal; text-align: left; font-size: 13px; padding: 4px; }")
         self.verticalHeader().setVisible(False)
         
@@ -167,3 +218,13 @@ class FileList(QTableView):
         if paths:
             self.files_dropped.emit(paths)
             event.acceptProposedAction()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Backspace or event.key() == Qt.Key_Delete:
+            indexes = self.selectionModel().selectedRows()
+            if indexes:
+                rows = [idx.row() for idx in indexes]
+                self.model().remove_tracks(rows)
+            event.accept()
+        else:
+            super().keyPressEvent(event)

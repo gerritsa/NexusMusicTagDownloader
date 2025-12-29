@@ -1,11 +1,11 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, 
                                  QPushButton, QTableView, QHeaderView, QAbstractItemView, QMessageBox)
-from PySide6.QtCore import Qt, SLOT, QAbstractTableModel, QModelIndex
+from PySide6.QtCore import Qt, SLOT, QAbstractTableModel, QModelIndex, Signal
 
 from ..core.download_manager import DownloadManager
 
 class DownloadJobModel(QAbstractTableModel):
-    COLUMNS = ["Status", "Title", "Artist", "Album", "Year", "Track", "Genre"]
+    COLUMNS = ["Status", "Title", "Artist", "Album", "Year", "Track", "Genre", "Album Artist", "Composer", "Disc", "Compilation"]
     
     def __init__(self, jobs=None):
         super().__init__()
@@ -33,12 +33,18 @@ class DownloadJobModel(QAbstractTableModel):
                     p = job.get('progress', 0)
                     return f"{p:.1f}%"
                 return s
-            if col == 1: return job.get('title', '')
-            if col == 2: return job.get('artist', '')
-            if col == 3: return job.get('album', '')
-            if col == 4: return str(job.get('year', ''))
-            if col == 5: return str(job.get('track', ''))
-            if col == 6: return job.get('genre', '')
+            
+            mapping = {
+                1: 'title', 2: 'artist', 3: 'album', 4: 'year', 
+                5: 'track', 6: 'genre', 7: 'album_artist', 
+                8: 'composer', 9: 'disc_number', 10: 'compilation'
+            }
+            key = mapping.get(col)
+            if key:
+                val = job.get(key, '')
+                if key == 'compilation':
+                    return "1" if val in [True, 1, "1"] else "0"
+                return str(val)
         
         if role == Qt.TextAlignmentRole:
             return Qt.AlignLeft | Qt.AlignVCenter
@@ -106,6 +112,53 @@ class DownloadJobModel(QAbstractTableModel):
     def get_job(self, row):
         return self.jobs[row]
 
+    def sort(self, column, order=Qt.AscendingOrder):
+        """Sort model by a specific column."""
+        self.layoutAboutToBeChanged.emit()
+        
+        reverse = (order == Qt.DescendingOrder)
+        
+        def sort_key(job):
+            if column == 0: # Status
+                return str(job.get('status', 'Pending')).lower()
+            
+            # Map columns to metadata keys
+            mapping = {
+                1: 'title', 2: 'artist', 3: 'album', 4: 'year', 
+                5: 'track', 6: 'genre', 7: 'album_artist', 
+                8: 'composer', 9: 'disc_number', 10: 'compilation'
+            }
+            key = mapping.get(column)
+            if not key: return ""
+            
+            val = job.get(key, "")
+            
+            # Special handling for numerical columns
+            if key in ['year', 'track', 'disc_number', 'compilation']:
+                try:
+                    s = str(val).split('/')[0]
+                    if key == 'compilation':
+                        return 1 if val in [True, 1, "1"] else 0
+                    return int(s) if s else 0
+                except:
+                    return 0
+                    
+            return str(val).lower()
+
+        self.jobs.sort(key=sort_key, reverse=reverse)
+        self.layoutChanged.emit()
+
+
+class DownloadTable(QTableView):
+    backspace_pressed = Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Backspace or event.key() == Qt.Key_Delete:
+            self.backspace_pressed.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
 
 class DownloadQueue(QWidget):
     def __init__(self, download_manager: DownloadManager):
@@ -113,36 +166,46 @@ class DownloadQueue(QWidget):
         self.manager = download_manager
         
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
         
-        # Input Area
+        # Row 1: Input Area (Primary Action)
         input_layout = QHBoxLayout()
         self.edit_url = QLineEdit()
         self.edit_url.setPlaceholderText("Paste YouTube URL...")
         self.btn_preload = QPushButton("Preload Info")
-        self.btn_download = QPushButton("Start Download")
+        # Style Preload as a semi-primary action (standard width)
+        self.btn_preload.setFixedWidth(100)
         
         input_layout.addWidget(self.edit_url)
         input_layout.addWidget(self.btn_preload)
-        input_layout.addWidget(self.btn_download)
         layout.addLayout(input_layout)
         
-        # Tools Area (Remove/Clear)
+        # Row 2: Management Toolbar (Secondary Actions)
         tools_layout = QHBoxLayout()
+        self.btn_download = QPushButton("Start Download")
         self.btn_remove = QPushButton("Remove Selected")
         self.btn_clear = QPushButton("Clear Completed")
         
+        # Make "Start Download" stand out slightly if possible (Standard native)
+        # We'll just group them together for 
+        tools_layout.addWidget(self.btn_download)
         tools_layout.addWidget(self.btn_remove)
         tools_layout.addWidget(self.btn_clear)
         tools_layout.addStretch()
         layout.addLayout(tools_layout)
         
         # Table Area
-        self.table = QTableView()
+        self.table = DownloadTable()
+        self.table.setFrameShape(QTableView.NoFrame) # Cleaner integration with tabs
+        self.table.backspace_pressed.connect(self._remove_selected)
         self.model = DownloadJobModel()
         self.table.setModel(self.model)
+        self.table.setSortingEnabled(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setSectionsMovable(True)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setStyleSheet("QHeaderView::section { font-weight: normal; text-align: left; font-size: 13px; padding: 4px; }")
         
@@ -168,7 +231,7 @@ class DownloadQueue(QWidget):
         # Show loader cursor
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.BusyCursor)
         self.btn_preload.setEnabled(False)
         self.edit_url.setEnabled(False)
         
@@ -222,7 +285,7 @@ class DownloadQueue(QWidget):
             job = self.model.get_job(r)
             if job['status'] == 'Pending':
                 worker = self.manager.start_download(job)
-                self.active_workers[worker] = r
+                self.active_workers[worker] = job
                 
                 worker.progress.connect(lambda p, w=worker: self._on_progress(w, p))
                 worker.finished.connect(lambda f, w=worker: self._on_finished(w, f))
@@ -265,18 +328,30 @@ class DownloadQueue(QWidget):
 
     def _on_progress(self, worker, p):
         if worker in self.active_workers:
-            row = self.active_workers[worker]
-            self.model.update_job_progress(row, p)
+            job = self.active_workers[worker]
+            try:
+                row = self.model.jobs.index(job)
+                self.model.update_job_progress(row, p)
+            except ValueError:
+                pass
 
     def _on_finished(self, worker, filename):
         if worker in self.active_workers:
-            row = self.active_workers[worker]
-            self.model.update_job_status(row, 'Done')
+            job = self.active_workers[worker]
+            try:
+                row = self.model.jobs.index(job)
+                self.model.update_job_status(row, 'Done')
+            except ValueError:
+                pass
             # cleanup
             del self.active_workers[worker]
 
     def _on_error(self, worker, err):
         if worker in self.active_workers:
-            row = self.active_workers[worker]
-            self.model.update_job_status(row, f"Error: {err}")
+            job = self.active_workers[worker]
+            try:
+                row = self.model.jobs.index(job)
+                self.model.update_job_status(row, f"Error: {err}")
+            except ValueError:
+                pass
             del self.active_workers[worker]

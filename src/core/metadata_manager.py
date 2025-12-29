@@ -3,7 +3,7 @@ import shutil
 from typing import Dict, Optional, Any, Union
 
 import mutagen
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, COMM, APIC, Encoding
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TDRC, TRCK, TCON, COMM, APIC, Encoding, TPE2, TCOM, TPOS, TCMP, TXXX
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
@@ -22,6 +22,12 @@ class MetadataManager:
     KEY_TRACK = 'track'
     KEY_GENRE = 'genre'
     KEY_COMMENT = 'comment'
+    KEY_ALBUM_ARTIST = 'album_artist'
+    KEY_COMPOSER = 'composer'
+    KEY_DISC = 'disc_number'
+    KEY_COMPILATION = 'compilation'
+    KEY_LABEL = 'label'
+    KEY_CATALOG = 'catalog_number'
 
     SUPPORTED_EXTENSIONS = ('.mp3', '.flac', '.m4a', '.mp4')
 
@@ -117,6 +123,20 @@ class MetadataManager:
         result[self.KEY_YEAR] = str(tags.get('TDRC', ''))
         result[self.KEY_TRACK] = str(tags.get('TRCK', ''))
         result[self.KEY_GENRE] = str(tags.get('TCON', ''))
+        result[self.KEY_ALBUM_ARTIST] = str(tags.get('TPE2', ''))
+        result[self.KEY_COMPOSER] = str(tags.get('TCOM', ''))
+        result[self.KEY_DISC] = str(tags.get('TPOS', ''))
+        result[self.KEY_LABEL] = str(tags.get('TPUB', ''))
+        
+        # Compilation
+        cpil = tags.get('TCMP')
+        result[self.KEY_COMPILATION] = str(cpil.text[0]) if cpil and cpil.text else "0"
+        
+        # Catalog Number (TXXX)
+        for key in tags.keys():
+            if key.startswith('TXXX:CATALOGNUMBER') or key.startswith('TXXX:CATALOG NUMBER'):
+                result[self.KEY_CATALOG] = str(tags[key])
+                break
         
         for key in tags.keys():
             if key.startswith('COMM'):
@@ -158,6 +178,28 @@ class MetadataManager:
         if self.KEY_YEAR in tags: set_frame(TDRC, 'TDRC', tags[self.KEY_YEAR])
         if self.KEY_TRACK in tags: set_frame(TRCK, 'TRCK', tags[self.KEY_TRACK])
         if self.KEY_GENRE in tags: set_frame(TCON, 'TCON', tags[self.KEY_GENRE])
+        if self.KEY_ALBUM_ARTIST in tags: set_frame(TPE2, 'TPE2', tags[self.KEY_ALBUM_ARTIST])
+        if self.KEY_COMPOSER in tags: set_frame(TCOM, 'TCOM', tags[self.KEY_COMPOSER])
+        if self.KEY_DISC in tags: set_frame(TPOS, 'TPOS', tags[self.KEY_DISC])
+        if self.KEY_LABEL in tags: # Use standard identifier TPUB for label
+             if tags[self.KEY_LABEL]:
+                from mutagen.id3 import TPUB
+                audio.tags.add(TPUB(encoding=Encoding.UTF8, text=str(tags[self.KEY_LABEL])))
+             elif 'TPUB' in audio.tags:
+                del audio.tags['TPUB']
+
+        if self.KEY_CATALOG in tags:
+            if tags[self.KEY_CATALOG]:
+                audio.tags.add(TXXX(encoding=Encoding.UTF8, desc='CATALOGNUMBER', text=str(tags[self.KEY_CATALOG])))
+            else:
+                # Remove TXXX:CATALOGNUMBER
+                for k in list(audio.tags.keys()):
+                    if k.startswith('TXXX:CATALOGNUMBER'):
+                        del audio.tags[k]
+
+        if self.KEY_COMPILATION in tags:
+            val = "1" if str(tags[self.KEY_COMPILATION]) in ("1", "True", "True") else "0"
+            audio.tags.add(TCMP(encoding=Encoding.UTF8, text=val))
         
         if self.KEY_COMMENT in tags:
             if tags[self.KEY_COMMENT]:
@@ -189,6 +231,12 @@ class MetadataManager:
         result[self.KEY_TRACK] = audio.get('TRACKNUMBER', [''])[0]
         result[self.KEY_GENRE] = audio.get('GENRE', [''])[0]
         result[self.KEY_COMMENT] = audio.get('COMMENT', [''])[0]
+        result[self.KEY_ALBUM_ARTIST] = audio.get('ALBUMARTIST', [''])[0]
+        result[self.KEY_COMPOSER] = audio.get('COMPOSER', [''])[0]
+        result[self.KEY_DISC] = audio.get('DISCNUMBER', [''])[0]
+        result[self.KEY_COMPILATION] = audio.get('COMPILATION', ['0'])[0]
+        result[self.KEY_LABEL] = audio.get('LABEL', audio.get('PUBLISHER', ['']))[0]
+        result[self.KEY_CATALOG] = audio.get('CATALOGNUMBER', [''])[0]
         
         # Cover Art
         if audio.pictures:
@@ -218,6 +266,12 @@ class MetadataManager:
         set_tag('TRACKNUMBER', self.KEY_TRACK)
         set_tag('GENRE', self.KEY_GENRE)
         set_tag('COMMENT', self.KEY_COMMENT)
+        set_tag('ALBUMARTIST', self.KEY_ALBUM_ARTIST)
+        set_tag('COMPOSER', self.KEY_COMPOSER)
+        set_tag('DISCNUMBER', self.KEY_DISC)
+        set_tag('COMPILATION', self.KEY_COMPILATION)
+        set_tag('LABEL', self.KEY_LABEL)
+        set_tag('CATALOGNUMBER', self.KEY_CATALOG)
 
         if cover_art_path and os.path.exists(cover_art_path):
             p = Picture()
@@ -244,7 +298,18 @@ class MetadataManager:
         result[self.KEY_YEAR] = audio.get('\xa9day', [''])[0]
         result[self.KEY_GENRE] = audio.get('\xa9gen', [''])[0]
         result[self.KEY_COMMENT] = audio.get('\xa9cmt', [''])[0]
-        
+        result[self.KEY_ALBUM_ARTIST] = audio.get('aART', [''])[0]
+        result[self.KEY_COMPOSER] = audio.get('\xa9wrt', [''])[0]
+        result[self.KEY_LABEL] = audio.get('----:com.apple.iTunes:PUBLISHER', audio.get('----:com.apple.iTunes:LABEL', ['']))[0]
+        result[self.KEY_CATALOG] = audio.get('----:com.apple.iTunes:CATALOGNUMBER', [''])[0]
+
+        cpil = audio.get('cpil')
+        result[self.KEY_COMPILATION] = "1" if cpil and cpil[0] else "0"
+
+        disk = audio.get('disk')
+        if disk:
+            result[self.KEY_DISC] = str(disk[0][0])
+            
         trkn = audio.get('trkn')
         if trkn:
             result[self.KEY_TRACK] = str(trkn[0][0])
@@ -279,6 +344,23 @@ class MetadataManager:
         set_atom('\xa9day', self.KEY_YEAR)
         set_atom('\xa9gen', self.KEY_GENRE)
         set_atom('\xa9cmt', self.KEY_COMMENT)
+        set_atom('aART', self.KEY_ALBUM_ARTIST)
+        set_atom('\xa9wrt', self.KEY_COMPOSER)
+        set_atom('----:com.apple.iTunes:PUBLISHER', self.KEY_LABEL)
+        set_atom('----:com.apple.iTunes:CATALOGNUMBER', self.KEY_CATALOG)
+
+        if self.KEY_COMPILATION in tags:
+            audio['cpil'] = [True if str(tags[self.KEY_COMPILATION]) in ("1", "True", "true") else False]
+
+        if self.KEY_DISC in tags and tags[self.KEY_DISC]:
+            try:
+                d_num = int(tags[self.KEY_DISC])
+                existing = audio.get('disk')
+                d_total = 0
+                if existing and len(existing) > 0:
+                    d_total = existing[0][1]
+                audio['disk'] = [(d_num, d_total)]
+            except: pass
         
         if self.KEY_TRACK in tags and tags[self.KEY_TRACK]:
             try:

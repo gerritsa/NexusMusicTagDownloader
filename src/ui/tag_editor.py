@@ -6,6 +6,7 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap
 class DropZone(QLabel):
     file_dropped = Signal(str)
     cover_removed = Signal()
+    cover_pasted = Signal(str) # Emits temporary file path
 
     def __init__(self):
         super().__init__()
@@ -28,14 +29,36 @@ class DropZone(QLabel):
         self._original_pixmap = None
 
     def contextMenuEvent(self, event):
-        from PySide6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu, QApplication
         menu = QMenu(self)
+        copy_action = menu.addAction("Copy cover")
+        paste_action = menu.addAction("Paste cover")
+        menu.addSeparator()
         remove_action = menu.addAction("Remove cover")
+        
+        # Enable/Disable based on state
+        copy_action.setEnabled(self._original_pixmap is not None)
+        clipboard = QApplication.clipboard()
+        paste_action.setEnabled(clipboard.mimeData().hasImage())
         
         action = menu.exec(event.globalPos())
         if action == remove_action:
             self.set_image(None)
             self.cover_removed.emit()
+        elif action == copy_action:
+            if self._original_pixmap:
+                clipboard.setPixmap(self._original_pixmap)
+        elif action == paste_action:
+            pixmap = clipboard.pixmap()
+            if not pixmap.isNull():
+                import tempfile
+                import os
+                temp_dir = tempfile.gettempdir()
+                temp_path = os.path.join(temp_dir, "nexus_pasted_cover.png")
+                pixmap.save(temp_path, "PNG")
+                self.current_cover_path = temp_path # Will be set in set_image too
+                self.set_image(temp_path)
+                self.cover_pasted.emit(temp_path)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
@@ -49,12 +72,8 @@ class DropZone(QLabel):
                 self.file_dropped.emit(path)
                 event.acceptProposedAction()
 
-    def set_image(self, path):
-        if path:
-            self._original_pixmap = QPixmap(path)
-            self._update_pixmap()
-            self.setStyleSheet("border: 1px solid #a0a0a0; background-color: #fff;") 
-        else:
+    def set_image(self, path_or_pixmap):
+        if not path_or_pixmap:
             self._original_pixmap = None
             self.setPixmap(QPixmap())
             self.setText("\n\nDrag Cover Art Here\n\n")
@@ -65,6 +84,14 @@ class DropZone(QLabel):
                     color: #888;
                 }
             """)
+        else:
+            if isinstance(path_or_pixmap, str):
+                self._original_pixmap = QPixmap(path_or_pixmap)
+            else:
+                self._original_pixmap = path_or_pixmap
+            
+            self._update_pixmap()
+            self.setStyleSheet("border: 1px solid #a0a0a0; background-color: #fff;")
             
     def resizeEvent(self, event):
         if self._original_pixmap:
@@ -111,13 +138,15 @@ class TagEditor(QWidget):
             vbox = QVBoxLayout()
             vbox.setSpacing(2)
             lbl = QLabel(label_text)
-            # lbl.setStyleSheet("font-weight: bold;") # Removed bold per user request
+            lbl.setStyleSheet("font-size: 11px; color: #555;") # Subtle labels
             vbox.addWidget(lbl)
             vbox.addWidget(widget)
             parent_layout.addLayout(vbox)
+            return vbox
 
         # Title
-        self.title_edit = QLineEdit()
+        self.title_edit = QComboBox()
+        self.title_edit.setEditable(True)
         add_v_field("Title:", self.title_edit)
 
         # Artist
@@ -130,29 +159,24 @@ class TagEditor(QWidget):
         self.album_edit.setEditable(True)
         add_v_field("Album:", self.album_edit)
 
-        # Row: Year | Track | Genre
-        row_layout = QHBoxLayout()
-        row_layout.setSpacing(10)
+        # Row: Year | Track
+        row_yt = QHBoxLayout()
+        row_yt.setSpacing(10)
         
         self.year_edit = QComboBox()
         self.year_edit.setEditable(True)
-        self.year_edit.setFixedWidth(80) # Sized for 4 chars
-        add_v_field("Year:", self.year_edit, row_layout)
+        self.year_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_v_field("Year:", self.year_edit, row_yt)
         
-        self.track_edit = QComboBox() # ComboBox for track often allows "1" or "1/12"
+        self.track_edit = QComboBox()
         self.track_edit.setEditable(True)
-        self.track_edit.setFixedWidth(60)
-        add_v_field("Track:", self.track_edit, row_layout)
+        self.track_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_v_field("Track:", self.track_edit, row_yt)
         
-        self.genre_edit = QComboBox()
-        self.genre_edit.setEditable(True)
-        self.genre_edit.addItems(["Pop", "Rock", "Electronic", "Classical", "Jazz", "Hip Hop"])
-        add_v_field("Genre:", self.genre_edit, row_layout)
-        
-        layout.addLayout(row_layout)
+        layout.addLayout(row_yt)
 
         # Comment
-        self.comment_edit = QComboBox() # Mp3Tag uses combo for history
+        self.comment_edit = QComboBox()
         self.comment_edit.setEditable(True)
         add_v_field("Comment:", self.comment_edit)
 
@@ -166,26 +190,45 @@ class TagEditor(QWidget):
         self.composer_edit.setEditable(True)
         add_v_field("Composer:", self.composer_edit)
 
-        # Disc Number + Compilation
-        disc_row = QHBoxLayout()
+        # Row: Disc | Genre
+        row_dg = QHBoxLayout()
+        row_dg.setSpacing(10)
+
         self.disc_edit = QComboBox()
         self.disc_edit.setEditable(True)
-        self.disc_edit.setFixedWidth(60)
-        add_v_field("Disc:", self.disc_edit, disc_row)
+        self.disc_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_v_field("Disc:", self.disc_edit, row_dg)
         
-        disc_row.addStretch()
+        self.genre_edit = QComboBox()
+        self.genre_edit.setEditable(True)
+        self.genre_edit.addItems(["Techno", "Melodic Techno", "Dark Techno"])
+        self.genre_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_v_field("Genre:", self.genre_edit, row_dg)
         
+        layout.addLayout(row_dg)
+        
+        # Row: Label | Catalog #
+        row_lc = QHBoxLayout()
+        row_lc.setSpacing(10)
+        
+        self.label_edit = QComboBox()
+        self.label_edit.setEditable(True)
+        self.label_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_v_field("Label:", self.label_edit, row_lc)
+        
+        self.catalog_edit = QComboBox()
+        self.catalog_edit.setEditable(True)
+        self.catalog_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        add_v_field("Catalog #:", self.catalog_edit, row_lc)
+        
+        layout.addLayout(row_lc)
+
+        # Compilation Row
+        row_comp = QHBoxLayout()
         self.compilation_check = QCheckBox("Compilation")
-        # Align checkbox with bottom to match text fields visually
-        wrapper = QVBoxLayout()
-        wrapper.addStretch()
-        wrapper.addWidget(self.compilation_check)
-        disc_row.addLayout(wrapper)
-        
-        layout.addLayout(disc_row)
-        
-        # Spacer to push Cover Art to bottom?
-        # Mp3Tag has cover art below fields.
+        row_comp.addWidget(self.compilation_check)
+        row_comp.addStretch()
+        layout.addLayout(row_comp)
         
         layout.addSpacing(10)
         
@@ -197,41 +240,66 @@ class TagEditor(QWidget):
         # Current Cover Path (internal)
         self.current_cover_path = None
         self.drop_zone.file_dropped.connect(self._on_cover_dropped)
+        self.drop_zone.cover_removed.connect(self._emit_save)
+        self.drop_zone.cover_pasted.connect(self._on_cover_pasted)
         
         # Connect signals for Auto-Save
-        self.title_edit.editingFinished.connect(self._emit_save)
-        
-        # For QComboBox (Editable): editingFinished covers the text part, 
-        # but activated(int) covers selecting from the dropdown.
-        for combo in [self.artist_edit, self.album_edit, self.year_edit, 
+        self.combos = [self.title_edit, self.artist_edit, self.album_edit, self.year_edit, 
                       self.track_edit, self.genre_edit, self.comment_edit, 
-                      self.album_artist_edit, self.composer_edit, self.disc_edit]:
+                      self.album_artist_edit, self.composer_edit, self.disc_edit,
+                      self.label_edit, self.catalog_edit]
+        
+        for combo in self.combos:
             combo.lineEdit().editingFinished.connect(self._emit_save)
             combo.activated.connect(self._emit_save)
             
         self.compilation_check.toggled.connect(self._emit_save)
 
-    def set_data(self, data: dict):
+    def _update_combo_arrows(self):
+        """No-op: Using native OS styling, arrows are always visible."""
+        pass
+
+    def set_data(self, data: dict, variants: dict = {}):
         self.blockSignals(True)
         
-        self.title_edit.setText(data.get('title', ''))
-        self.artist_edit.setCurrentText(data.get('artist', ''))
-        self.album_edit.setCurrentText(data.get('album', ''))
-        self.year_edit.setCurrentText(str(data.get('year', '')))
-        self.track_edit.setCurrentText(str(data.get('track', '')))
-        self.genre_edit.setCurrentText(data.get('genre', ''))
-        self.comment_edit.setCurrentText(data.get('comment', ''))
-        self.album_artist_edit.setCurrentText(data.get('album_artist', ''))
-        self.composer_edit.setCurrentText(data.get('composer', ''))
-        self.disc_edit.setCurrentText(str(data.get('disc_number', '')))
+        mapping = {
+            'title': self.title_edit,
+            'artist': self.artist_edit,
+            'album': self.album_edit,
+            'year': self.year_edit,
+            'track': self.track_edit,
+            'genre': self.genre_edit,
+            'comment': self.comment_edit,
+            'album_artist': self.album_artist_edit,
+            'composer': self.composer_edit,
+            'disc_number': self.disc_edit,
+            'label': self.label_edit,
+            'catalog_number': self.catalog_edit
+        }
+
+        for key, combo in mapping.items():
+            # 1. Update items based on variants
+            v_list = variants.get(key, [])
+            combo.clear()
+            if combo == self.genre_edit:
+                combo.addItems(["Techno", "Melodic Techno", "Dark Techno"])
+            else:
+                if v_list:
+                    combo.addItems(v_list)
+            
+            # 2. Set current text
+            val = str(data.get(key, ''))
+            combo.setCurrentText(val)
+        
         self.compilation_check.setChecked(bool(data.get('compilation', False)))
+        self._update_combo_arrows()
         
         # Cover Art
         if 'cover_path' in data and data['cover_path']:
              self.drop_zone.set_image(data['cover_path'])
              self.current_cover_path = data['cover_path']
         else:
-             self.drop_zone.set_image(None) # Use set_image(None) to clear the image and reset text/style
+             self.drop_zone.set_image(None) 
              self.current_cover_path = None
 
         self.blockSignals(False)
@@ -241,9 +309,13 @@ class TagEditor(QWidget):
         self.drop_zone.set_image(path)
         self._emit_save()
 
+    def _on_cover_pasted(self, path):
+        self.current_cover_path = path
+        self._emit_save()
+
     def _emit_save(self):
         data = {
-            'title': self.title_edit.text(),
+            'title': self.title_edit.currentText(),
             'artist': self.artist_edit.currentText(),
             'album': self.album_edit.currentText(),
             'year': self.year_edit.currentText(),
@@ -253,7 +325,9 @@ class TagEditor(QWidget):
             'album_artist': self.album_artist_edit.currentText(),
             'composer': self.composer_edit.currentText(),
             'disc_number': self.disc_edit.currentText(),
-            'compilation': self.compilation_check.isChecked(),
+            'label': self.label_edit.currentText(),
+            'catalog_number': self.catalog_edit.currentText(),
+            'compilation': "1" if self.compilation_check.isChecked() else "0",
         }
         if self.current_cover_path:
             data['cover_path'] = self.current_cover_path
