@@ -110,6 +110,7 @@ class MetadataManager:
         result = {}
         try:
             audio = MP3(path, ID3=ID3)
+            result['duration'] = audio.info.length if audio.info else 0
         except mutagen.MutagenError:
             return result
         
@@ -224,6 +225,7 @@ class MetadataManager:
     def _load_flac(self, path: str) -> Dict[str, Any]:
         audio = FLAC(path)
         result = {}
+        result['duration'] = audio.info.length if audio.info else 0
         result[self.KEY_TITLE] = audio.get('TITLE', [''])[0]
         result[self.KEY_ARTIST] = audio.get('ARTIST', [''])[0]
         result[self.KEY_ALBUM] = audio.get('ALBUM', [''])[0]
@@ -291,7 +293,7 @@ class MetadataManager:
     def _load_mp4(self, path: str) -> Dict[str, Any]:
         audio = MP4(path)
         result = {}
-        
+        result['duration'] = audio.info.length if audio.info else 0
         result[self.KEY_TITLE] = audio.get('\xa9nam', [''])[0]
         result[self.KEY_ARTIST] = audio.get('\xa9ART', [''])[0]
         result[self.KEY_ALBUM] = audio.get('\xa9alb', [''])[0]
@@ -464,3 +466,59 @@ class MetadataManager:
             print(f"Regex error: {e}")
             
         return {}
+
+    @classmethod
+    def guess_metadata_from_filename(cls, filename: str) -> Dict[str, Any]:
+        """
+        Attempts to guess metadata from filename using common patterns.
+        Useful when file has no tags.
+        """
+        import re
+        name_only = os.path.splitext(os.path.basename(filename))[0]
+        
+        guessed = {}
+
+        # 1. Extract Catalog Number (e.g., [CAT001], [CAT-001])
+        # Look for square brackets containing letters and numbers
+        cat_match = re.search(r'\[([A-Z0-9\-]+)\]', name_only, re.I)
+        if cat_match:
+            guessed[cls.KEY_CATALOG] = cat_match.group(1)
+            # Remove from name to simplify subsequent matching
+            name_only = name_only.replace(cat_match.group(0), "").strip()
+            name_only = re.sub(r'\s+', ' ', name_only).strip(" -_")
+
+        # Common patterns (evaluated in order of specificity)
+        # 1. Artist - Album - Track - Title
+        # 2. Artist - Album - Title
+        # 3. Artist - Title
+        # 4. Track - Artist - Title
+        # 5. Track - Title
+        
+        patterns = [
+            # Artist - Album - Track - Title
+            (r'^(?P<artist>.+?) - (?P<album>.+?) - (?P<track>\d+) - (?P<title>.+)$', ['artist', 'album', 'track', 'title']),
+            # Artist - Album - Title
+            (r'^(?P<artist>.+?) - (?P<album>.+?) - (?P<title>.+)$', ['artist', 'album', 'title']),
+             # Track - Artist - Title
+            (r'^(?P<track>\d+) - (?P<artist>.+?) - (?P<title>.+)$', ['track', 'artist', 'title']),
+            # Artist - Title
+            (r'^(?P<artist>.+?) - (?P<title>.+)$', ['artist', 'title']),
+            # Track - Title
+            (r'^(?P<track>\d+) - (?P<title>.+)$', ['track', 'title']),
+        ]
+
+        matched_pattern = False
+        for regex, keys in patterns:
+            match = re.match(regex, name_only)
+            if match:
+                data = match.groupdict()
+                # Clean up
+                for k, v in data.items():
+                    guessed[k] = v.strip()
+                matched_pattern = True
+                break
+        
+        if not matched_pattern:
+            guessed[cls.KEY_TITLE] = name_only
+        
+        return guessed

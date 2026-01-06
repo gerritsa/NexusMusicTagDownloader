@@ -110,18 +110,9 @@ class MainWindow(QMainWindow):
         # Discogs Sub-Menu
         menu_discogs = menu_edit.addMenu("Match with &Discogs")
         
-        action_discogs_track = menu_discogs.addAction("Match &Track(s)...")
-        action_discogs_track.setShortcut("Cmd+D")
-        action_discogs_track.triggered.connect(self._on_match_discogs_track)
-        
-        action_discogs_album = menu_discogs.addAction("Match &Album...")
-        action_discogs_album.setShortcut("Cmd+Shift+D")
-        action_discogs_album.triggered.connect(self._on_match_discogs_album)
-        
-        menu_discogs.addSeparator()
-        
-        action_discogs_auto = menu_discogs.addAction("&Auto-Match All (YOLO)")
-        action_discogs_auto.triggered.connect(self._on_match_discogs_auto)
+        action_discogs_smart = menu_discogs.addAction("Smart &Match...")
+        action_discogs_smart.setShortcut("Ctrl+D")
+        action_discogs_smart.triggered.connect(self._on_match_discogs_smart)
         
         menu_convert = self.menuBar().addMenu("&Convert")
         action_tag_to_name = menu_convert.addAction("Tag - Filename")
@@ -180,222 +171,44 @@ class MainWindow(QMainWindow):
             "<p>A high-performance tool for music enthusiasts, combining "
             "YouTube downloading with advanced metadata management.</p>")
 
-    def _on_match_discogs_track(self):
-        """Match selected track(s) with Discogs releases (one by one with approval)"""
+    def _on_match_discogs_smart(self):
+        """
+        Smartly determines whether to match as a single track, an album, or a batch of individual tracks.
+        """
         from PySide6.QtWidgets import QMessageBox, QProgressDialog, QDialog
-        from .discogs_dialog import DiscogsMatchDialog
-        import os
-        
-        # Check if token is set
-        if not self.settings.discogs_token:
-            QMessageBox.warning(self, "Discogs Token Required",
-                "Please set your Discogs API token in Settings first.\n\n"
-                "Click Tools → Settings → Discogs to add your token.")
-            return
-        
-        # Reinitialize manager with current token
-        self.discogs_manager.set_token(self.settings.discogs_token)
-        
-        # Get selected tracks from current tab
-        if self.tabs.currentIndex() == 0:
-            # Library
-            selected_rows = self.file_list.selectionModel().selectedRows()
-            if not selected_rows:
-                QMessageBox.information(self, "No Selection", "Please select one or more tracks.")
-                return
-            
-            tracks_data = []
-            for row in selected_rows:
-                track = self.track_model.get_track(row.row())
-                if track:
-                    tracks_data.append({
-                        'track': track,
-                        'artist': track.metadata.get('artist', '') or '',
-                        'title': track.metadata.get('title', '') or track.filename,
-                        'row': row.row()
-                    })
-        else:
-            # Downloads
-            QMessageBox.information(self, "Not Supported", 
-                "Discogs matching is currently only available for Library tracks.")
-            return
-        
-        # Process each track
-        for track_data in tracks_data:
-            artist = track_data['artist']
-            title = track_data['title']
-            track = track_data['track']
-            row_idx = track_data['row']
-            
-            # Try auto-match first
-            release_id = self.discogs_manager.auto_match(artist, title)
-            
-            if not release_id:
-                # Need manual selection
-                worker = self.discogs_manager.search_async(artist, title)
-                if not worker:
-                    QMessageBox.warning(self, "Search Failed", "Could not search Discogs.")
-                    continue
-                
-                # Show progress dialog
-                progress = QProgressDialog("Searching Discogs...", "Cancel", 0, 0, self)
-                progress.setWindowModality(Qt.WindowModal)
-                progress.setMinimumDuration(0)
-                progress.setValue(0)
-                
-                # Use an event loop to wait for search results without blocking the main event loop
-                from PySide6.QtCore import QEventLoop
-                loop = QEventLoop()
-                
-                matches = []
-                
-                def on_search_finished(results):
-                    nonlocal matches
-                    matches = results
-                    progress.close()
-                    loop.quit()
-                
-                def on_search_error(error):
-                    progress.close()
-                    QMessageBox.warning(self, "Search Error", f"Failed to search Discogs: {error}")
-                    loop.quit()
-                
-                worker.finished.connect(on_search_finished)
-                worker.error.connect(on_search_error)
-                worker.start()
-                
-                # Execute local event loop until loop.quit() is called
-                loop.exec()
-                
-                if not matches:
-                    QMessageBox.information(self, "No Matches", f"No matches found for:\n{artist} - {title}")
-                    continue
-                
-                # Show manual selection dialog
-                dialog = DiscogsMatchDialog(matches, self)
-                if dialog.exec() == QDialog.Accepted:
-                    release_id = dialog.get_selected_id()
-                else:
-                    continue  # User cancelled
-            
-            if not release_id:
-                continue
-            
-            # Fetch release data
-            release_data = self.discogs_manager.get_release_data(release_id)
-            if not release_data:
-                QMessageBox.warning(self, "Fetch Failed", "Could not fetch release details.")
-                continue
-            
-            # Build proposed metadata changes
-            from difflib import SequenceMatcher
-            proposed = {}
-            
-            if release_data.get('artists'):
-                proposed['artist'] = release_data['artists']
-            if release_data.get('album'):
-                proposed['album'] = release_data['album']
-            if release_data.get('year'):
-                proposed['year'] = release_data['year']
-            if release_data.get('genre'):
-                proposed['genre'] = release_data['genre']
-            if release_data.get('label'):
-                proposed['label'] = release_data['label']
-            if release_data.get('catalog_number'):
-                proposed['catalog_number'] = release_data['catalog_number']
-            if release_data.get('compilation'):
-                proposed['compilation'] = release_data['compilation']
-            
-            # Try to find track number by fuzzy matching against the tracklist
-            discogs_tracks = release_data.get('tracklist', [])
-            matched_title = None
-            if discogs_tracks:
-                best_match = None
-                best_score = 0.0
-                for dt in discogs_tracks:
-                    dt_title = dt.title if hasattr(dt, 'title') else str(dt)
-                    score = SequenceMatcher(None, title.lower(), dt_title.lower()).ratio()
-                    if score > best_score:
-                        best_score = score
-                        best_match = dt
-                
-                if best_match and best_score > 0.5:
-                    if hasattr(best_match, 'position') and best_match.position:
-                        proposed['track'] = str(best_match.position)
-                    if hasattr(best_match, 'title') and best_match.title:
-                        matched_title = best_match.title
-            
-            # Show preview dialog
-            from .discogs_dialog import MetadataPreviewDialog
-            preview = MetadataPreviewDialog(track.metadata, proposed, track.filename, self)
-            if preview.exec() != QDialog.Accepted or not preview.was_approved():
-                print(f"  - Skipped by user")
-                continue
-            
-            # Apply approved changes
-            print(f"Applying metadata for: {track.filename}")
-            for key, val in proposed.items():
-                if val and str(val).strip():
-                    print(f"  - Setting {key}: {val}")
-                    track.metadata[key] = str(val)
-            
-            # Download and embed cover art if available
-            artwork_path = None
-            if release_data.get('cover_image'):
-                temp_cover = f"temp_discogs_cover_{track.filename}.jpg"
-                if self.discogs_manager.download_cover_art(release_data['cover_image'], temp_cover):
-                    artwork_path = temp_cover
-            
-            # Save track
-            success = self.metadata_manager.save_tags(track.file_path, track.metadata, artwork_path)
-            
-            # Clean up temp cover
-            if artwork_path:
-                try:
-                    os.remove(artwork_path)
-                except:
-                    pass
-            
-            if success:
-                # Reload track to reflect changes
-                self.track_model.update_track(row_idx)
-                # Refresh tag editor
-                self._on_library_selection(self.file_list.selectionModel().selection(), None)
-        
-        QMessageBox.information(self, "Success", "Discogs metadata applied successfully!")
-
-    def _on_match_discogs_album(self):
-        """Match multiple tracks as a single album with Discogs."""
-        from PySide6.QtWidgets import QMessageBox, QProgressDialog, QDialog
-        from PySide6.QtCore import QEventLoop
-        from .discogs_dialog import DiscogsMatchDialog
-        import os
+        from PySide6.QtCore import QEventLoop, Qt
+        from .discogs_dialog import DiscogsMatchDialog, AlbumMappingDialog, MetadataPreviewDialog
         from difflib import SequenceMatcher
-        
-        # Check token
+        import os
+        from collections import Counter
+
+        # 1. Validation
         if not self.settings.discogs_token:
-            QMessageBox.warning(self, "Discogs Token Required",
-                "Please set your Discogs API token in Settings first.")
+            QMessageBox.warning(self, "Discogs Token Required", "Please set your Discogs API token in Settings.")
             return
         
-        self.discogs_manager.set_token(self.settings.discogs_token)
-        
-        # Get selected tracks
         if self.tabs.currentIndex() != 0:
-            QMessageBox.information(self, "Not Supported", 
-                "Discogs matching is currently only available for Library tracks.")
+            QMessageBox.information(self, "Not Supported", "Discogs matching is only for Library tracks.")
             return
-            
+
         selected_rows = self.file_list.selectionModel().selectedRows()
-        if len(selected_rows) < 2:
-            QMessageBox.information(self, "Select Multiple Tracks", 
-                "Please select multiple tracks belonging to the same album.")
+        if not selected_rows:
+            QMessageBox.information(self, "No Selection", "Please select tracks to match.")
             return
-        
+
+        self.discogs_manager.set_token(self.settings.discogs_token)
+
+        # 2. Analyze Selection
         tracks_data = []
         for row in selected_rows:
             track = self.track_model.get_track(row.row())
             if track:
+                # Always attempt to augment missing metadata from filename
+                guessed = self.metadata_manager.guess_metadata_from_filename(track.file_path)
+                for k, v in guessed.items():
+                    if not track.metadata.get(k):
+                        track.metadata[k] = v
+
                 tracks_data.append({
                     'track': track,
                     'artist': track.metadata.get('artist', '') or '',
@@ -403,256 +216,329 @@ class MainWindow(QMainWindow):
                     'title': track.metadata.get('title', '') or track.filename,
                     'row': row.row()
                 })
+
+        is_album_mode = False
         
-        # Find consolidated query (most common artist + album)
+        # Heuristic: If multiple tracks, ask user intent based on metadata consistency
+        if len(tracks_data) > 1:
+            artists = [t['artist'] for t in tracks_data if t['artist']]
+            albums = [t['album'] for t in tracks_data if t['album']]
+            
+            common_artist = Counter(artists).most_common(1)[0][0] if artists else ''
+            common_album = Counter(albums).most_common(1)[0][0] if albums else ''
+            
+            msg = f"You have selected {len(tracks_data)} tracks.\n"
+            if common_album:
+                msg += f"They seem to belong to album '{common_album}' by '{common_artist}'.\n\n"
+            else:
+                msg += "Metadata varies among these tracks.\n\n"
+                
+            msg += "How would you like to match them?"
+            
+            box = QMessageBox(self)
+            box.setWindowTitle("Match Mode")
+            box.setText(msg)
+            btn_album = box.addButton("As a Single Album", QMessageBox.ActionRole)
+            btn_individual = box.addButton("Individually (Track by Track)", QMessageBox.ActionRole)
+            box.addButton(QMessageBox.Cancel)
+            
+            box.exec()
+            
+            if box.clickedButton() == btn_album:
+                is_album_mode = True
+            elif box.clickedButton() == btn_individual:
+                is_album_mode = False
+            else:
+                return # Cancel
+
+        # 3. Execution
+        if is_album_mode:
+            self._process_album_match(tracks_data)
+        else:
+            self._process_individual_match(tracks_data)
+
+    def _process_album_match(self, tracks_data):
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog, QDialog
+        from PySide6.QtCore import QEventLoop, Qt
+        from .discogs_dialog import DiscogsMatchDialog, AlbumMappingDialog
+        from difflib import SequenceMatcher
+        import os
         from collections import Counter
+        
+        # 1. Determine Search Query
         artists = [t['artist'] for t in tracks_data if t['artist']]
         albums = [t['album'] for t in tracks_data if t['album']]
-        
         common_artist = Counter(artists).most_common(1)[0][0] if artists else ''
         common_album = Counter(albums).most_common(1)[0][0] if albums else ''
         
-        query = f"{common_artist} {common_album}".strip()
-        if not query:
-            # Fallback to first track's title
-            query = tracks_data[0]['title'] if tracks_data else ''
+        query_artist = common_artist
+        query_album = common_album
         
-        print(f"Album Match: Searching for '{query}'")
+        # If metadata is empty, ask user
+        if not query_artist or not query_album:
+             # Just use what we have, or fallback to first track
+             if not query_artist and tracks_data: query_artist = tracks_data[0]['artist']
+             if not query_album and tracks_data: query_album = tracks_data[0]['album']
+
+        query_track = ""
+        if not query_album and tracks_data:
+             # Fallback: Use the first track's title to find the album
+             query_track = tracks_data[0]['title']
+             print(f"Album Match: Missing album name. Probing using track: {query_track}")
+
+        print(f"Album Match: Searching for '{query_artist} - {query_album}' (Track: {query_track})")
         
-        # Search Discogs
-        worker = self.discogs_manager.search_async(common_artist, common_album)
+        # 2. Search Discogs
+        worker = self.discogs_manager.search_async(query_artist, query_track, query_album)
         if not worker:
-            QMessageBox.warning(self, "Search Failed", "Could not search Discogs.")
+            QMessageBox.warning(self, "Error", "Could not start search.")
             return
-        
+
         progress = QProgressDialog("Searching Discogs for album...", "Cancel", 0, 0, self)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
-        progress.setValue(0)
         
         loop = QEventLoop()
         matches = []
         
-        def on_finished(results):
-            nonlocal matches
-            matches = results
-            progress.close()
-            loop.quit()
-        
-        def on_error(error):
-            progress.close()
-            QMessageBox.warning(self, "Search Error", f"Failed to search: {error}")
-            loop.quit()
-        
-        worker.finished.connect(on_finished)
-        worker.error.connect(on_error)
+        worker.finished.connect(lambda res: (matches.extend(res), loop.quit()))
+        worker.error.connect(lambda err: (print(f"Search error: {err}"), loop.quit()))
         worker.start()
+        
         loop.exec()
+        progress.close()
         
         if not matches:
-            QMessageBox.information(self, "No Matches", f"No album found for: {query}")
+            QMessageBox.information(self, "No Matches", f"No album found for:\n{query_artist} - {query_album}")
             return
-        
-        # Show selection dialog
-        dialog = DiscogsMatchDialog(matches, self)
-        dialog.setWindowTitle("Select Album")
+
+        # 3. Select Release
+        dialog = DiscogsMatchDialog(matches, self, query_info=f"{query_artist} - {query_album}")
         if dialog.exec() != QDialog.Accepted:
             return
-        
+            
         release_id = dialog.get_selected_id()
+        
+        # 4. Fetch Details
         release_data = self.discogs_manager.get_release_data(release_id)
         if not release_data:
-            QMessageBox.warning(self, "Fetch Failed", "Could not fetch release details.")
+            QMessageBox.warning(self, "Error", "Could not fetch release details.")
             return
-        
-        # Get Discogs tracklist
-        discogs_tracks = release_data.get('tracklist', [])
-        if not discogs_tracks:
-            print("Album Match: No tracklist available, applying album metadata only.")
-        
-        # Fuzzy match local tracks to Discogs tracklist
-        def fuzzy_match_score(local_title, discogs_title):
-            return SequenceMatcher(None, local_title.lower(), discogs_title.lower()).ratio()
-        
-        # Download cover art once
-        artwork_path = None
-        if release_data.get('cover_image'):
-            temp_cover = f"temp_discogs_album_cover.jpg"
-            if self.discogs_manager.download_cover_art(release_data['cover_image'], temp_cover):
-                artwork_path = temp_cover
-        
-        # Apply metadata to each track
-        success_count = 0
-        for tdata in tracks_data:
-            track = tdata['track']
-            row_idx = tdata['row']
-            local_title = tdata['title']
             
-            # Try to find best matching track from tracklist
+        discogs_tracks = release_data.get('tracklist', [])
+        
+        # 5. Map Files to Tracks
+        mapping = []
+        # Pre-calculate scores to suggest best mapping
+        # Create a pool of discogs tracks
+        available_d_tracks = list(discogs_tracks)
+        
+        for tdata in tracks_data:
+            local_title = tdata['title']
+            local_duration = float(tdata['track'].metadata.get('duration', 0))
             best_match = None
             best_score = 0.0
-            for dt in discogs_tracks:
-                dt_title = dt.title if hasattr(dt, 'title') else str(dt)
-                score = fuzzy_match_score(local_title, dt_title)
+            
+            # Find best match in available tracks
+            for i, dt in enumerate(available_d_tracks):
+                dt_title = dt['title']
+                
+                # Check position too if available? 
+                # For now just title similarity
+                score = SequenceMatcher(None, local_title.lower(), dt_title.lower()).ratio()
+                
+                # Boost score if duration matches (within 4 seconds)
+                dt_duration = dt.get('duration_seconds', 0)
+                if local_duration > 0 and dt_duration > 0:
+                    diff = abs(local_duration - dt_duration)
+                    if diff <= 4:
+                        score += 0.4 # Significant boost
+                        if score > 1.0: score = 1.0
+                    elif diff > 15:
+                        score -= 0.2 # Penalty for large duration mismatch
+                
                 if score > best_score:
                     best_score = score
                     best_match = dt
             
-            print(f"  Local: '{local_title}' -> Best match: '{getattr(best_match, 'title', 'N/A')}' (score: {best_score:.2f})")
+            # If match is decent, assign it and remove from pool to prevent duplicates
+            d_track = None
+            if best_score > 0.4: # Low threshold, user will verify
+                d_track = best_match
+                # We generally don't remove from pool because sometimes user has duplicates or different versions
+                # But for 1-to-1 mapping it's better. Let's keep it simple for now.
             
-            # Apply album-level metadata
-            def update_if_present(key, val):
-                if val and str(val).strip():
-                    track.metadata[key] = str(val)
-            
-            update_if_present('artist', release_data.get('artists'))
-            update_if_present('album', release_data.get('album'))
-            update_if_present('year', release_data.get('year'))
-            update_if_present('genre', release_data.get('genre'))
-            update_if_present('label', release_data.get('label'))
-            update_if_present('catalog_number', release_data.get('catalog_number'))
-            
-            # Apply track-level metadata if we have a good match
-            if best_match and best_score > 0.5:
-                if hasattr(best_match, 'title'):
-                    track.metadata['title'] = best_match.title
-                if hasattr(best_match, 'position'):
-                    track.metadata['track'] = best_match.position
-            
-            # Save
-            if self.metadata_manager.save_tags(track.file_path, track.metadata, artwork_path):
-                self.track_model.update_track(row_idx)
-                success_count += 1
-        
-        # Cleanup
-        if artwork_path:
-            try:
-                os.remove(artwork_path)
-            except: pass
-        
-        self._on_library_selection(self.file_list.selectionModel().selection(), None)
-        QMessageBox.information(self, "Album Match Complete", 
-            f"Successfully updated {success_count} of {len(tracks_data)} tracks.")
+            mapping.append({
+                'file_name': os.path.basename(tdata['track'].file_path),
+                'track': tdata['track'],
+                'discogs_track': d_track, # This is now a dict
+                'score': best_score,
+                'row': tdata['row']
+            })
 
-    def _on_match_discogs_auto(self):
-        """Auto-match all selected tracks without confirmation (YOLO mode)."""
-        from PySide6.QtWidgets import QMessageBox, QProgressDialog
-        import os
-        
-        # Check token
-        if not self.settings.discogs_token:
-            QMessageBox.warning(self, "Discogs Token Required",
-                "Please set your Discogs API token in Settings first.")
-            return
-        
-        self.discogs_manager.set_token(self.settings.discogs_token)
-        
-        # Get selected tracks
-        if self.tabs.currentIndex() != 0:
-            QMessageBox.information(self, "Not Supported", 
-                "Discogs matching is currently only available for Library tracks.")
+        # 6. Show Mapping Dialog
+        map_dialog = AlbumMappingDialog(mapping, discogs_tracks, release_data.get('title', 'Unknown'), self)
+        if map_dialog.exec() != QDialog.Accepted:
             return
             
-        selected_rows = self.file_list.selectionModel().selectedRows()
-        if not selected_rows:
-            QMessageBox.information(self, "No Selection", "Please select one or more tracks.")
-            return
+        final_mapping = map_dialog.get_mapping()
         
-        # Confirm YOLO
-        reply = QMessageBox.question(self, "Auto-Match All",
-            f"This will attempt to auto-match {len(selected_rows)} track(s) without confirmation.\n\n"
-            "If no confident match is found, a track will be skipped.\n\n"
-            "Continue?",
-            QMessageBox.Yes | QMessageBox.No)
-        
-        if reply != QMessageBox.Yes:
-            return
-        
-        progress = QProgressDialog("Auto-matching tracks...", "Cancel", 0, len(selected_rows), self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
+        # 7. Apply Changes
+        # Download cover once
+        artwork_path = None
+        if release_data.get('cover_image'):
+            temp_cover = "temp_discogs_album_cover.jpg"
+            if self.discogs_manager.download_cover_art(release_data['cover_image'], temp_cover):
+                artwork_path = temp_cover
         
         success_count = 0
-        skip_count = 0
-        
-        for i, row in enumerate(selected_rows):
-            if progress.wasCanceled():
-                break
+        for item in final_mapping:
+            track = item['track']
+            d_track = item['discogs_track']
             
-            track = self.track_model.get_track(row.row())
-            if not track:
-                continue
+            # Album global tags
+            def update(k, v):
+                if v: track.metadata[k] = str(v)
             
-            artist = track.metadata.get('artist', '') or ''
-            title = track.metadata.get('title', '') or track.filename
+            update('album_artist', release_data.get('album_artist'))
+            update('album', release_data.get('album'))
+            update('year', release_data.get('year'))
+            update('genre', release_data.get('genre'))
+            update('label', release_data.get('label'))
+            update('catalog_number', release_data.get('catalog_number'))
+            update('compilation', release_data.get('compilation'))
             
-            progress.setLabelText(f"Matching: {artist} - {title}")
-            progress.setValue(i)
+            # Track specific tags
+            # Artist: Use track artist if available, otherwise release artist
+            track_artist = ""
+            if d_track:
+                track.metadata['title'] = d_track.get('title', '')
+                track.metadata['track'] = d_track.get('position', '')
+                track_artist = d_track.get('artists', '')
             
-            # Try auto-match
-            release_id = self.discogs_manager.auto_match(artist, title)
+            if not track_artist:
+                track_artist = release_data.get('artists', '')
             
-            if not release_id:
-                print(f"YOLO Skip: No confident match for '{artist} - {title}'")
-                skip_count += 1
-                continue
-            
-            # Fetch and apply
-            release_data = self.discogs_manager.get_release_data(release_id)
-            if not release_data:
-                skip_count += 1
-                continue
-            
-            def update_if_present(key, val):
-                if val and str(val).strip():
-                    track.metadata[key] = str(val)
-            
-            update_if_present('artist', release_data.get('artists'))
-            update_if_present('album', release_data.get('album'))
-            update_if_present('year', release_data.get('year'))
-            update_if_present('genre', release_data.get('genre'))
-            update_if_present('label', release_data.get('label'))
-            update_if_present('catalog_number', release_data.get('catalog_number'))
-            
-            # Try to find track number from tracklist
-            from difflib import SequenceMatcher
-            discogs_tracks = release_data.get('tracklist', [])
-            if discogs_tracks:
-                best_match = None
-                best_score = 0.0
-                for dt in discogs_tracks:
-                    dt_title = dt.title if hasattr(dt, 'title') else str(dt)
-                    score = SequenceMatcher(None, title.lower(), dt_title.lower()).ratio()
-                    if score > best_score:
-                        best_score = score
-                        best_match = dt
-                
-                if best_match and best_score > 0.5:
-                    if hasattr(best_match, 'position') and best_match.position:
-                        track.metadata['track'] = str(best_match.position)
-            
-            # Download cover
-            artwork_path = None
-            if release_data.get('cover_image'):
-                temp_cover = f"temp_yolo_cover_{i}.jpg"
-                if self.discogs_manager.download_cover_art(release_data['cover_image'], temp_cover):
-                    artwork_path = temp_cover
+            if track_artist:
+                track.metadata['artist'] = track_artist
             
             if self.metadata_manager.save_tags(track.file_path, track.metadata, artwork_path):
-                self.track_model.update_track(row.row())
+                self.track_model.update_track(item['row'])
                 success_count += 1
+                
+        if artwork_path and os.path.exists(artwork_path):
+            os.remove(artwork_path)
             
-            if artwork_path:
-                try:
-                    os.remove(artwork_path)
-                except: pass
-        
-        progress.setValue(len(selected_rows))
         self._on_library_selection(self.file_list.selectionModel().selection(), None)
+        QMessageBox.information(self, "Success", f"Updated {success_count} tracks.")
+
+    def _process_individual_match(self, tracks_data):
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog, QDialog
+        from PySide6.QtCore import QEventLoop, Qt
+        from .discogs_dialog import DiscogsMatchDialog, MetadataPreviewDialog
+        import os
         
-        QMessageBox.information(self, "Auto-Match Complete",
-            f"Successfully matched: {success_count}\n"
-            f"Skipped (no confident match): {skip_count}")
+        for i, tdata in enumerate(tracks_data):
+            track = tdata['track']
+            artist = tdata['artist']
+            title = tdata['title']
+            album = tdata['album']
+            
+            # 1. Try Auto-Match
+            release_id = self.discogs_manager.auto_match(artist, title)
+            
+            # 2. If no auto-match, search manually
+            if not release_id:
+                # Search
+                # Pass album and catalog number if available to help find the release
+                cat_no = track.metadata.get('catalog_number', '')
+                worker = self.discogs_manager.search_async(artist, title, album, cat_no)
+                if not worker: continue
+                
+                # Show generic progress
+                loop = QEventLoop()
+                matches = []
+                worker.finished.connect(lambda res: (matches.extend(res), loop.quit()))
+                worker.error.connect(lambda err: loop.quit())
+                worker.start()
+                loop.exec()
+                
+                if matches:
+                    dialog = DiscogsMatchDialog(matches, self, query_info=f"{artist} - {title}")
+                    dialog.setWindowTitle(f"Match: {title}")
+                    if dialog.exec() == QDialog.Accepted:
+                        release_id = dialog.get_selected_id()
+                else:
+                    QMessageBox.information(self, "No Matches", 
+                        f"No matches found for:\nArtist: {artist}\nTitle: {title}\nAlbum: {album}")
+                    continue
+            
+            if not release_id:
+                print(f"Skipping {title} - no match selected")
+                continue
+                
+            # 3. Fetch Data
+            release_data = self.discogs_manager.get_release_data(release_id)
+            if not release_data: continue
+            
+            # 4. Propose Changes
+            proposed = {}
+            for k in ['album', 'year', 'genre', 'label', 'catalog_number', 'compilation', 'album_artist']:
+                if release_data.get(k): proposed[k] = release_data[k]
+                
+            # Track/Title logic
+            # Try to match specific track in release
+            from difflib import SequenceMatcher
+            best_match = None
+            best_score = 0.0
+            for dt in release_data.get('tracklist', []):
+                dt_title = dt.get('title', '')
+                score = SequenceMatcher(None, title.lower(), dt_title.lower()).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_match = dt
+            
+            track_artist = ""
+            if best_match and best_score > 0.5:
+                proposed['title'] = best_match.get('title', '')
+                proposed['track'] = best_match.get('position', '')
+                track_artist = best_match.get('artists', '')
+            else:
+                # If we matched the release but not the specific track (e.g. single), 
+                # title might be the release title or we keep local title.
+                if len(release_data.get('tracklist', [])) == 1:
+                     dt = release_data['tracklist'][0]
+                     proposed['title'] = dt.get('title', '')
+                     track_artist = dt.get('artists', '')
+            
+            # Fallback to release artist if track specific artist is missing
+            if not track_artist:
+                track_artist = release_data.get('artists', '')
+            
+            if track_artist:
+                proposed['artist'] = track_artist
+            
+            # 5. Preview
+            preview = MetadataPreviewDialog(track.metadata, proposed, track.filename, self)
+            if preview.exec() == QDialog.Accepted:
+                # Apply
+                for k, v in proposed.items():
+                    if v: track.metadata[k] = str(v)
+                
+                # Cover Art
+                artwork_path = None
+                if release_data.get('cover_image'):
+                    temp_cover = f"temp_cover_{i}.jpg"
+                    if self.discogs_manager.download_cover_art(release_data['cover_image'], temp_cover):
+                        artwork_path = temp_cover
+                        
+                self.metadata_manager.save_tags(track.file_path, track.metadata, artwork_path)
+                self.track_model.update_track(tdata['row'])
+                
+                if artwork_path and os.path.exists(artwork_path):
+                    os.remove(artwork_path)
+                    
+        self._on_library_selection(self.file_list.selectionModel().selection(), None)
 
 
     def _apply_column_visibility(self):

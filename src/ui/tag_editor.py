@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                                 QLineEdit, QComboBox, QCheckBox, QFrame, QSizePolicy, QSpacerItem)
+                                 QLineEdit, QComboBox, QCheckBox, QFrame, QSizePolicy, QSpacerItem, QMenu, QApplication)
 from PySide6.QtCore import Qt, Signal, QMimeData
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap, QPainter
 
 class DropZone(QLabel):
     file_dropped = Signal(str)
@@ -29,7 +29,6 @@ class DropZone(QLabel):
         self._original_pixmap = None
 
     def contextMenuEvent(self, event):
-        from PySide6.QtWidgets import QMenu, QApplication
         menu = QMenu(self)
         copy_action = menu.addAction("Copy cover")
         paste_action = menu.addAction("Paste cover")
@@ -68,7 +67,7 @@ class DropZone(QLabel):
         urls = event.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
-            if path.lower().endswith(('.jpg', '.jpeg', '.png')):
+            if path.lower().endswith((".jpg", ".jpeg", ".png")):
                 self.file_dropped.emit(path)
                 event.acceptProposedAction()
 
@@ -112,7 +111,6 @@ class DropZone(QLabel):
         result.fill(Qt.transparent)
         
         # Draw the scaled pixmap centered
-        from PySide6.QtGui import QPainter
         painter = QPainter(result)
         # Calculate offset to center
         x = (self.width() - scaled.width()) // 2
@@ -138,7 +136,7 @@ class TagEditor(QWidget):
             vbox = QVBoxLayout()
             vbox.setSpacing(2)
             lbl = QLabel(label_text)
-            lbl.setStyleSheet("font-size: 11px; color: #555;") # Subtle labels
+            lbl.setStyleSheet("font-size: 11px;") # Subtle labels
             vbox.addWidget(lbl)
             vbox.addWidget(widget)
             parent_layout.addLayout(vbox)

@@ -19,22 +19,23 @@ class TestUIStructure(unittest.TestCase):
     def test_mainwindow_components(self):
         window = MainWindow()
         
-        # Check central widget is TabWidget
+        # Check central widget is QSplitter
         central = window.centralWidget()
-        self.assertEqual(central.__class__.__name__, 'QTabWidget')
+        self.assertEqual(central.__class__.__name__, 'QSplitter')
         
-        # Check tabs exist
+        # Check it contains TagEditor and Tabs
         self.assertEqual(central.count(), 2)
-        self.assertEqual(central.tabText(0), "Library")
-        self.assertEqual(central.tabText(1), "Downloads")
+        self.assertEqual(central.widget(0).__class__.__name__, 'TagEditor')
+        self.assertEqual(central.widget(1).__class__.__name__, 'QTabWidget')
         
-        # Check Dock
-        docks = window.findChildren(type(window.dock))
-        self.assertTrue(len(docks) >= 1)
+        tabs = central.widget(1)
+        self.assertEqual(tabs.count(), 2)
+        self.assertEqual(tabs.tabText(0), "Library")
+        self.assertEqual(tabs.tabText(1), "Downloads")
         
-        # Check TagEditor
+        # Check TagEditor access
         self.assertTrue(window.tag_editor)
-        self.assertTrue(window.tag_editor.btn_save)
+        self.assertTrue(window.tag_editor.title_edit)
 
 if __name__ == '__main__':
     unittest.main()
