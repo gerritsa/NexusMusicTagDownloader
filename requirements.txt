@@ -1,3 +1,6 @@
 mutagen
 PySide6
 yt-dlp
+discogs-client
+requests
+Pillow

@@ -281,7 +281,7 @@ class DiscogsManager(QObject):
         try:
             # Discogs requires a User-Agent for image downloads
             headers = {
-                'User-Agent': 'TagNexus/1.0 +https://github.com/berriebeer/NexusMusicTagDownloader'
+                'User-Agent': 'TagNexus/1.0 +https://github.com/gerritsa/NexusMusicTagDownloader'
             }
             response = requests.get(image_url, headers=headers, timeout=10)
             response.raise_for_status()
