@@ -1,5 +1,9 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, 
-                                 QPushButton, QTableView, QHeaderView, QAbstractItemView, QMessageBox)
+                                 QPushButton, QTableView, QHeaderView, QAbstractItemView, QMessageBox, QMenu)
+from PySide6.QtGui import QAction
+import sys
+import os
+import subprocess
 from PySide6.QtCore import Qt, SLOT, QAbstractTableModel, QModelIndex, Signal
 
 from ..core.download_manager import DownloadManager
@@ -215,6 +219,9 @@ class DownloadQueue(QWidget):
         layout.addWidget(self.table)
         
         # Connect
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        
         self.btn_preload.clicked.connect(self._preload)
         self.btn_download.clicked.connect(self._start_download)
         self.btn_remove.clicked.connect(self._remove_selected)
@@ -355,3 +362,39 @@ class DownloadQueue(QWidget):
             except ValueError:
                 pass
             del self.active_workers[worker]
+
+    def _show_context_menu(self, pos):
+        # Find which row is under the mouse
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+        
+        row = index.row()
+        job = self.model.get_job(row)
+        
+        # Only show if status is Done (or if we have a file path anyway?)
+        # Let's say we only show if we have 'file_path' and it exists
+        file_path = job.get('file_path')
+        
+        # Or if we know the output file?
+        # But 'DownloadManager' calculates final path inside the worker thread
+        # We updated 'DownloadManager' to store 'file_path' in job_data
+        
+        if not file_path or not os.path.exists(file_path):
+             return
+             
+        menu = QMenu(self)
+        action_reveal = QAction("Reveal in Finder" if sys.platform == "darwin" else "Show in Folder", self)
+        action_reveal.triggered.connect(lambda: self._reveal_file(file_path))
+        menu.addAction(action_reveal)
+        
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def _reveal_file(self, path):
+        if sys.platform == "darwin":
+            subprocess.call(["open", "-R", path])
+        elif sys.platform == "win32":
+            subprocess.call(["explorer", "/select,", os.path.normpath(path)])
+        else:
+            # Linux/Unix - try generic open of parent dir
+            subprocess.call(["xdg-open", os.path.dirname(path)])

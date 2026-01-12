@@ -341,6 +341,10 @@ class DownloadManager(QObject):
                 try:
                     os.rename(filepath, new_filepath)
                     print(f"Renamed to: {new_filepath}")
+                    
+                    # Store final path in job data so we can 'Reveal in Finder'
+                    worker.job_data['file_path'] = new_filepath
+
                 except OSError as e:
                     print(f"Rename failed: {e}")
 
