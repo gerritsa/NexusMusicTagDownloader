@@ -4,7 +4,7 @@ import yt_dlp
 
 class DownloadWorker(QThread):
     progress = Signal(float)
-    finished = Signal(str) # Emits filename
+    download_finished = Signal(str) # Emitted when download + post-processing is done
     error = Signal(str)
     log = Signal(str)
 
@@ -42,7 +42,7 @@ class DownloadWorker(QThread):
                 self.log.emit(f"Download complete: {d['filename']}")
 
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'outtmpl': os.path.join(self.output_dir, '%(title)s.%(ext)s'),
             'postprocessors': [
                 {
@@ -51,16 +51,18 @@ class DownloadWorker(QThread):
                     'preferredquality': self.bitrate,
                 },
                 {'key': 'EmbedThumbnail'},
-                # {'key': 'FFmpegMetadata'}, # Disabled to prevent unwanted tags
             ],
             'writethumbnail': True,
             'progress_hooks': [progress_hook],
             'quiet': True,
             'no_warnings': True,
-            'user_agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            # Network stability fixes
+            'referer': 'https://www.youtube.com/',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['web', 'mweb', 'ios', 'android']
+                }
+            },
             # Network stability & Speed fixes
-            'force_ipv4': True,
             'retries': 10,
             'fragment_retries': 15,
             'socket_timeout': 60,
@@ -82,7 +84,7 @@ class DownloadWorker(QThread):
                 base, _ = os.path.splitext(filename)
                 final_path = f"{base}.{self.format_key}"
                 
-                self.finished.emit(final_path)
+                self.download_finished.emit(final_path)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -110,7 +112,12 @@ class FetchInfoWorker(QThread):
             'extract_flat': True,
             'quiet': True,
             'no_warnings': True,
-            'user_agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'referer': 'https://www.youtube.com/',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['web', 'mweb', 'ios', 'android']
+                }
+            },
         }
         
         results = []
@@ -202,7 +209,10 @@ class DownloadManager(QObject):
         self.output_dir = os.path.expanduser("~/Downloads")
         if self.settings and hasattr(self.settings, 'save_path'):
             self.output_dir = self.settings.save_path
-        self.workers = []
+        
+        self.max_concurrent = 5
+        self.waiting_queue = []
+        self.active_workers = []
 
     def fetch_info(self, url: str):
         """
@@ -218,34 +228,51 @@ class DownloadManager(QObject):
 
     def start_download(self, job_data: dict):
         """
-        Starts a download for a single job item.
-        job_data: {'url', 'title', 'artist', ...}
+        Adds a single job item to the download queue.
+        The manager will start it when a slot becomes available.
         """
-        url = job_data.get('url')
-        
-        # Hardened settings access to prevent AttributeError
-        save_path = os.path.expanduser("~/Downloads")
-        bitrate = "320"
-        
-        if self.settings:
-            try:
-                save_path = self.settings.save_path
-                bitrate = self.settings.bitrate
-            except AttributeError:
-                pass
-                
-        worker = DownloadWorker(url, save_path, bitrate=bitrate)
-        self.workers.append(worker)
-        
-        # We need to pass metadata to apply post-download
-        worker.job_data = job_data
-        
-        worker.finished.connect(lambda f: self._on_worker_finished(worker, f))
-        worker.error.connect(lambda e: self._cleanup(worker))
-        
-        self.download_added.emit(worker)
-        worker.start()
-        return worker
+        if job_data in self.waiting_queue or any(w.job_data == job_data for w in self.active_workers):
+            return None
+            
+        job_data['status'] = 'Queued'
+        self.waiting_queue.append(job_data)
+        self._process_queue()
+        return None # Worker not returned immediately anymore
+
+    def _process_queue(self):
+        """
+        Starts pending downloads if slots are available.
+        """
+        while len(self.active_workers) < self.max_concurrent and self.waiting_queue:
+            job_data = self.waiting_queue.pop(0)
+            
+            url = job_data.get('url')
+            save_path = self.output_dir
+            bitrate = "320"
+            
+            if self.settings:
+                try:
+                    save_path = self.settings.save_path
+                    bitrate = self.settings.bitrate
+                except AttributeError:
+                    pass
+            
+            worker = DownloadWorker(url, save_path, bitrate=bitrate)
+            worker.job_data = job_data
+            self.active_workers.append(worker)
+            
+            # Use custom signal for logic, built-in signal for cleanup
+            worker.download_finished.connect(lambda f, w=worker: self._on_worker_finished(w, f))
+            worker.error.connect(lambda e, w=worker: self._on_worker_error(w, e))
+            worker.finished.connect(lambda w=worker: self._cleanup(w))
+            
+            job_data['status'] = 'Starting...'
+            self.download_added.emit(worker)
+            worker.start()
+
+    def _on_worker_error(self, worker, error_msg):
+        print(f"Download Error: {error_msg}")
+        self._cleanup(worker)
 
     def _on_worker_finished(self, worker, filepath):
         # Apply metadata overrides
@@ -351,7 +378,9 @@ class DownloadManager(QObject):
         self._cleanup(worker)
 
     def _cleanup(self, worker):
-        if worker in self.workers:
-            worker.wait()
-            # self.workers.remove(worker) 
-            pass
+        if worker in self.active_workers:
+            self.active_workers.remove(worker)
+            # Use deleteLater to ensure the thread is safely destroyed
+            worker.deleteLater()
+            # Process next in queue
+            self._process_queue()

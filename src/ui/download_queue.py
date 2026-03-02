@@ -227,9 +227,12 @@ class DownloadQueue(QWidget):
         self.btn_remove.clicked.connect(self._remove_selected)
         self.btn_clear.clicked.connect(self._clear_completed)
         
-        # Mapping worker -> row index
+        # Mapping worker -> job data
         self.active_workers = {} 
         self._active_fetchers = set()
+        
+        # Connect Manager Signals
+        self.manager.download_added.connect(self._on_download_started)
 
     def _preload(self):
         url = self.edit_url.text().strip()
@@ -291,16 +294,8 @@ class DownloadQueue(QWidget):
         for r in rows:
             job = self.model.get_job(r)
             if job['status'] == 'Pending':
-                worker = self.manager.start_download(job)
-                self.active_workers[worker] = job
-                
-                worker.progress.connect(lambda p, w=worker: self._on_progress(w, p))
-                worker.finished.connect(lambda f, w=worker: self._on_finished(w, f))
-                worker.error.connect(lambda e, w=worker: self._on_error(w, e))
-                
-                job['status'] = 'Starting...'
-                job['worker'] = worker # Keep ref
-                self.model.update_job_status(r, 'Starting...')
+                self.manager.start_download(job)
+                self.model.update_job_status(r, 'Queued')
                 started += 1
         
         if started == 0 and not rows:
@@ -332,6 +327,25 @@ class DownloadQueue(QWidget):
         
         if rows_to_remove:
             self.model.remove_jobs(rows_to_remove)
+
+    def _on_download_started(self, worker):
+        """
+        Triggered when a worker is actually popped from the queue 
+        and starts its download thread.
+        """
+        job = worker.job_data
+        self.active_workers[worker] = job
+        
+        worker.progress.connect(lambda p, w=worker: self._on_progress(w, p))
+        worker.download_finished.connect(lambda f, w=worker: self._on_finished(w, f))
+        worker.error.connect(lambda e, w=worker: self._on_error(w, e))
+        
+        # Update UI to reflect it's now starting
+        try:
+            row = self.model.jobs.index(job)
+            self.model.update_job_status(row, 'Starting...')
+        except ValueError:
+            pass
 
     def _on_progress(self, worker, p):
         if worker in self.active_workers:

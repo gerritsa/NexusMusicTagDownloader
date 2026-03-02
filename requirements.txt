@@ -1,6 +1,6 @@
 mutagen
 PySide6
-yt-dlp
+yt-dlp>=2026.02.21
 discogs-client
 requests
 Pillow
