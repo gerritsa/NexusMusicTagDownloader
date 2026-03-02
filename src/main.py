@@ -13,10 +13,20 @@ from src.ui.main_window import MainWindow
 
 def create_splash_pixmap():
     width, height = 500, 300
-    pixmap = QPixmap(width, height)
+    
+    # High DPI (Retina) Support
+    dpr = 1.0
+    if QApplication.instance():
+        dpr = QApplication.instance().primaryScreen().devicePixelRatio()
+    
+    pixmap = QPixmap(int(width * dpr), int(height * dpr))
+    pixmap.setDevicePixelRatio(dpr)
+    
     # Background
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.TextAntialiasing)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform)
     
     gradient = QLinearGradient(0, 0, width, height)
     gradient.setColorAt(0, QColor("#1a1a2e"))
@@ -29,35 +39,34 @@ def create_splash_pixmap():
     icon_path = resource_path(os.path.join("src", "assets", "icon.png"))
     if os.path.exists(icon_path):
         logo = QPixmap(icon_path)
-        logo_size = 64
-        scaled_logo = logo.scaled(logo_size, logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        logo_size = 120
+        # Scale to physical pixels (size * dpr) for maximum sharpness
+        physical_size = int(logo_size * dpr)
+        scaled_logo = logo.scaled(physical_size, physical_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled_logo.setDevicePixelRatio(dpr)
         
-        # Draw with rounded corners clipping
-        painter.save()
-        lx, ly = width - logo_size - 30, 30
-        path = QPainterPath()
-        path.addRoundedRect(lx, ly, logo_size, logo_size, 14, 14)
-        painter.setClipPath(path)
+        lx, ly = (width - logo_size) // 2, 40
         painter.drawPixmap(lx, ly, scaled_logo)
-        painter.restore()
         
     # Title
-    font_title = QFont("Helvetica", 32, QFont.Bold)
+    font_title = QFont("Helvetica", 28, QFont.Bold)
     painter.setFont(font_title)
     painter.setPen(QColor("#ffffff"))
-    painter.drawText(40, 110, "NEXUS")
+    title_rect = painter.fontMetrics().boundingRect("NEXUS")
+    painter.drawText((width - title_rect.width()) // 2, 190, "NEXUS")
     
-    font_subtitle = QFont("Helvetica", 16)
+    font_subtitle = QFont("Helvetica", 14)
     painter.setFont(font_subtitle)
     painter.setPen(QColor("#cccccc"))
-    painter.drawText(40, 145, "Music Tag & Downloader")
+    subtitle_rect = painter.fontMetrics().boundingRect("Music Tag & Downloader")
+    painter.drawText((width - subtitle_rect.width()) // 2, 220, "Music Tag & Downloader")
     
     # Author & Version
-    font_small = QFont("Helvetica", 11)
+    font_small = QFont("Helvetica", 10)
     painter.setFont(font_small)
-    painter.setPen(QColor("#888888"))
-    painter.drawText(40, height - 35, "by BerrieBeer")
-    painter.drawText(width - 80, height - 35, "v1.0.0")
+    painter.setPen(QColor("#666666"))
+    painter.drawText(20, height - 20, "by BerrieBeer")
+    painter.drawText(width - 60, height - 20, "v1.0.0")
     
     painter.end()
     return pixmap

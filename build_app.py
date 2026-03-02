@@ -19,7 +19,9 @@ args = [
     '--windowed', # No console
     '--noconfirm',
     '--clean',
-    '--onefile', # Single binary (inside .app)
+    '--onedir',   # Standard App Bundle structure
+    '--icon=src/assets/icon.icns',
+    '--add-data=src/assets:src/assets',
     # Recursively include packages if hidden imports are missed, 
     # but usually PyInstaller finds them.
     '--collect-all=mutagen',
