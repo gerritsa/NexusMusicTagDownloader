@@ -2,6 +2,8 @@ import PyInstaller.__main__
 import os
 import shutil
 
+import sys
+
 # Clean dist
 if os.path.exists('dist'):
     shutil.rmtree('dist')
@@ -12,6 +14,14 @@ if os.path.exists('build'):
 ENTRY_POINT = os.path.join('src', 'main.py')
 APP_NAME = 'Nexus Music Tag & Downloader'
 
+# Determine Icon based on OS
+if sys.platform == 'darwin':
+    ICON_PATH = 'src/assets/icon.icns'
+elif sys.platform == 'win32':
+    ICON_PATH = 'src/assets/icon.ico'
+else:
+    ICON_PATH = 'src/assets/icon.png' # Fallback
+
 # PyInstaller args
 args = [
     ENTRY_POINT,
@@ -20,7 +30,7 @@ args = [
     '--noconfirm',
     '--clean',
     '--onedir',   # Standard App Bundle structure
-    '--icon=src/assets/icon.icns',
+    f'--icon={ICON_PATH}',
     '--add-data=src/assets:src/assets',
     # Recursively include packages if hidden imports are missed, 
     # but usually PyInstaller finds them.
